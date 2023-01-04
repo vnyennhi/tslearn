@@ -12,11 +12,27 @@ from .dtw_variants import dtw, dtw_path
 from .soft_dtw_fast import _soft_dtw, _soft_dtw_grad, \
     _jacobian_product_sq_euc
 
-__author__ = 'Romain Tavenard romain.tavenard[at]univ-rennes2.fr'
+__author__ = 'Nhi Vo vnyennhi[at]gmail.com'
 
 GLOBAL_CONSTRAINT_CODE = {None: 0, "": 0, "itakura": 1, "sakoe_chiba": 2}
 TSLEARN_VALID_METRICS = ["dtw", "gak", "softdtw", "sax"]
 VARIABLE_LENGTH_METRICS = ["dtw", "gak", "softdtw", "sax"]
+alpha = 1
+
+@njit()
+def _local_squared_dist(x, y, weight_vector):
+    global alpha
+    dist = 0.
+    for di in range(x.shape[0]):
+        ### Nhi: wdtw cal
+        diff = (x[di] - y[di])
+        sq_diff = diff * diff
+        dist += (1 / (pow(weight_vector, alpha))) * sq_diff
+
+        ### Nhi: dtw cal
+        # diff = (x[di] - y[di])
+        # dist += diff * diff
+    return dist
 
 
 @njit(nogil=True)
@@ -27,13 +43,20 @@ def njit_gak(s1, s2, gram):
     cum_sum = numpy.zeros((l1 + 1, l2 + 1))
     cum_sum[0, 0] = 1.
 
+    ### Nhi: generate random weight_vector here, we should think about a precomputed weight based on data
+    # weight_vector = numpy.ones(l2)/1 # uniform weighting
+    # weight_vector = numpy.random.rand(l2)  # random weighting
+    tmp_s2 = s2.ravel()
+    weight_vector = numpy.abs(tmp_s2 - numpy.mean(tmp_s2)) / (numpy.max(tmp_s2) / 2)  # using s2 as weighting
+    # print(weight_vector)
+
     for i in range(l1):
         for j in range(l2):
-            cum_sum[i + 1, j + 1] = (cum_sum[i, j + 1] +
-                                     cum_sum[i + 1, j] +
-                                     cum_sum[i, j]) * gram[i, j]
-
-    return cum_sum[l1, l2]
+            cum_sum[i + 1, j + 1] = _local_squared_dist(s1[i], s2[j], weight_vector[j])
+            cum_sum[i + 1, j + 1] += min(cum_sum[i, j + 1],
+                                             cum_sum[i + 1, j],
+                                             cum_sum[i, j]) * gram[i,j]
+    return cum_sum[1:, 1:]
 
 
 def _gak_gram(s1, s2, sigma=1.):
@@ -448,7 +471,7 @@ def soft_dtw_alignment(ts1, ts2, gamma=1.):
     return a, dist_sq
 
 
-def cdist_soft_dtw(dataset1, dataset2=None, gamma=1.):
+def cdist_weighted_soft_dtw(dataset1, dataset2=None, gamma=1.):
     r"""Compute cross-similarity matrix using Soft-DTW metric.
 
     Soft-DTW was originally presented in [1]_ and is
@@ -532,7 +555,7 @@ def cdist_soft_dtw(dataset1, dataset2=None, gamma=1.):
     return dists
 
 
-def cdist_soft_dtw_normalized(dataset1, dataset2=None, gamma=1.):
+def cdist_weighted_soft_dtw_normalized(dataset1, dataset2=None, gamma=1.):
     r"""Compute cross-similarity matrix using a normalized version of the
     Soft-DTW metric.
 
@@ -585,7 +608,7 @@ def cdist_soft_dtw_normalized(dataset1, dataset2=None, gamma=1.):
     Examples
     --------
     >>> time_series = numpy.random.randn(10, 15, 1)
-    >>> numpy.alltrue(cdist_soft_dtw_normalized(time_series) >= 0.)
+    >>> numpy.alltrue(cdist_weighted_soft_dtw_normalized(time_series) >= 0.)
     True
 
     See Also
@@ -599,7 +622,7 @@ def cdist_soft_dtw_normalized(dataset1, dataset2=None, gamma=1.):
     .. [1] M. Cuturi, M. Blondel "Soft-DTW: a Differentiable Loss Function for
        Time-Series," ICML 2017.
     """
-    dists = cdist_soft_dtw(dataset1, dataset2=dataset2, gamma=gamma)
+    dists = cdist_weighted_soft_dtw(dataset1, dataset2=dataset2, gamma=gamma)
     d_ii = numpy.diag(dists)
     dists -= .5 * (d_ii.reshape((-1, 1)) + d_ii.reshape((1, -1)))
     return dists
@@ -728,4 +751,4 @@ class SquaredEuclidean:
 
         _jacobian_product_sq_euc(self.X, self.Y, E.astype(numpy.float64), G)
 
-        return G
+        

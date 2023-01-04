@@ -241,9 +241,9 @@ class UCR_UEA_datasets:
         >>> y_train.shape
         (1000,)
         >>> X_train, y_train, X_test, y_test = data_loader.load_dataset(
-        ...         "Adiac")
+        ...         "CinCECGTorso")
         >>> X_train.shape
-        (390, 176, 1)
+        (40, 1639, 1)
         >>> X_train, y_train, X_test, y_test = data_loader.load_dataset(
         ...         "PenDigits")
         >>> X_train.shape
@@ -347,3 +347,5 @@ class UCR_UEA_datasets:
                 warnings.warn("Could not cache dataset \"%s\": %s"
                               % (dataset_name, str(exception)),
                               category=RuntimeWarning, stacklevel=2)
+
+

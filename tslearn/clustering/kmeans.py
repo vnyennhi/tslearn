@@ -29,7 +29,7 @@ except:
     def _kmeans_plusplus(*args, **kwargs):
         return _k_init(*args, **kwargs), None
 
-from tslearn.metrics import cdist_gak, cdist_dtw, cdist_soft_dtw, sigma_gak
+from tslearn.metrics import cdist_gak, cdist_dtw, cdist_wdtw, cdist_soft_dtw, cdist_weighted_soft_dtw, sigma_gak
 from tslearn.barycenters import euclidean_barycenter, \
     dtw_barycenter_averaging, softdtw_barycenter
 from sklearn.utils import check_array
@@ -637,14 +637,20 @@ class TimeSeriesKMeans(TransformerMixin, ClusterMixin,
                     def metric_fun(x, y):
                         return cdist_dtw(x, y, n_jobs=self.n_jobs,
                                          verbose=self.verbose, **metric_params)
-
+                elif self.metric == "wdtw":
+                    def metric_fun(x, y):
+                        return cdist_wdtw(x, y, n_jobs=self.n_jobs,
+                                         verbose=self.verbose, **metric_params)
                 elif self.metric == "softdtw":
                     def metric_fun(x, y):
                         return cdist_soft_dtw(x, y, **metric_params)
+                elif self.metric == "wsoftdtw":
+                    def metric_fun(x, y):
+                        return cdist_weighted_soft_dtw(x, y, **metric_params)
                 else:
                     raise ValueError(
-                        "Incorrect metric: %s (should be one of 'dtw', "
-                        "'softdtw', 'euclidean')" % self.metric
+                        "Incorrect metric: %s (should be one of 'dtw', 'wdtw', "
+                        "'softdtw', 'wsoftdtw', 'euclidean')" % self.metric
                     )
                 self.cluster_centers_ = _k_init_metric(X, self.n_clusters,
                                                        cdist_metric=metric_fun,
@@ -683,11 +689,16 @@ class TimeSeriesKMeans(TransformerMixin, ClusterMixin,
         elif self.metric == "dtw":
             return cdist_dtw(X, self.cluster_centers_, n_jobs=self.n_jobs,
                              verbose=self.verbose, **metric_params)
+        elif self.metric == "wdtw":
+            return cdist_wdtw(X, self.cluster_centers_, n_jobs=self.n_jobs,
+                             verbose=self.verbose, **metric_params)
         elif self.metric == "softdtw":
             return cdist_soft_dtw(X, self.cluster_centers_, **metric_params)
+        elif self.metric == "wsoftdtw":
+            return cdist_weighted_soft_dtw(X, self.cluster_centers_, **metric_params)
         else:
-            raise ValueError("Incorrect metric: %s (should be one of 'dtw', "
-                             "'softdtw', 'euclidean')" % self.metric)
+            raise ValueError("Incorrect metric: %s (should be one of 'dtw', 'wdtw', "
+                             "'softdtw', 'wsoftdtw', 'euclidean')" % self.metric)
 
     def _assign(self, X, update_class_attributes=True):
         dists = self._transform(X)
@@ -697,6 +708,10 @@ class TimeSeriesKMeans(TransformerMixin, ClusterMixin,
             _check_no_empty_cluster(self.labels_, self.n_clusters)
             if self.dtw_inertia and self.metric != "dtw":
                 inertia_dists = cdist_dtw(X, self.cluster_centers_,
+                                          n_jobs=self.n_jobs,
+                                          verbose=self.verbose)
+            elif self.dtw_inertia and self.metric != "wdtw":
+                inertia_dists = cdist_wdtw(X, self.cluster_centers_,
                                           n_jobs=self.n_jobs,
                                           verbose=self.verbose)
             else:
@@ -716,7 +731,20 @@ class TimeSeriesKMeans(TransformerMixin, ClusterMixin,
                     init_barycenter=self.cluster_centers_[k],
                     metric_params=metric_params,
                     verbose=False)
+            if self.metric == "wdtw":
+                self.cluster_centers_[k] = dtw_barycenter_averaging(
+                    X=X[self.labels_ == k],
+                    barycenter_size=None,
+                    init_barycenter=self.cluster_centers_[k],
+                    metric_params=metric_params,
+                    verbose=False)
             elif self.metric == "softdtw":
+                self.cluster_centers_[k] = softdtw_barycenter(
+                    X=X[self.labels_ == k],
+                    max_iter=self.max_iter_barycenter,
+                    init=self.cluster_centers_[k],
+                    **metric_params)
+            elif self.metric == "wsoftdtw":
                 self.cluster_centers_[k] = softdtw_barycenter(
                     X=X[self.labels_ == k],
                     max_iter=self.max_iter_barycenter,

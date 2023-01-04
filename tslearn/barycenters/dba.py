@@ -1,4 +1,6 @@
 import numpy
+# seed = 42
+# numpy.random.seed(seed)
 import warnings
 from scipy.interpolate import interp1d
 from sklearn.exceptions import ConvergenceWarning

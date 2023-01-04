@@ -2,7 +2,7 @@ from sklearn.metrics.cluster import silhouette_score as sklearn_silhouette
 from scipy.spatial.distance import cdist
 import numpy
 
-from tslearn.metrics import cdist_dtw, cdist_soft_dtw_normalized
+from tslearn.metrics import cdist_dtw, cdist_wdtw, cdist_soft_dtw_normalized, cdist_weighted_soft_dtw_normalized
 from tslearn.preprocessing import TimeSeriesResampler
 from tslearn.utils import to_time_series_dataset, to_time_series
 
@@ -172,8 +172,13 @@ def silhouette_score(X, labels, metric=None, sample_size=None,
     elif metric == "dtw" or metric is None:
         sklearn_X = cdist_dtw(X, n_jobs=n_jobs, verbose=verbose,
                               **metric_params_)
+    elif metric == "wdtw" or metric is None:
+        sklearn_X = cdist_wdtw(X, n_jobs=n_jobs, verbose=verbose,
+                              **metric_params_)
     elif metric == "softdtw":
         sklearn_X = cdist_soft_dtw_normalized(X, **metric_params_)
+    elif metric == "wsoftdtw":
+        sklearn_X = cdist_weighted_soft_dtw_normalized(X, **metric_params_)
     elif metric == "euclidean":
         X_ = to_time_series_dataset(X)
         X_ = X_.reshape((X.shape[0], -1))

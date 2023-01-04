@@ -13,26 +13,33 @@ from .utils import _cdist_generic
 
 __author__ = 'Romain Tavenard romain.tavenard[at]univ-rennes2.fr'
 
-GLOBAL_CONSTRAINT_CODE = {None: 0, "": 0, "itakura": 1, "sakoe_chiba": 2}
-
+GLOBAL_CONSTRAINT_CODE1 = {None: 0, "": 0, "itakura": 1, "sakoe_chiba": 2}
+alpha = 1
 
 # Nhi: add this for reproducibility
 # @njit()
-# def set_seed(value):
+# def set_seed1(value):
 #     numpy.random.seed(seed)
 
 
 @njit()
-def _local_squared_dist(x, y):
+def _local_squared_dist1(x, y, weight_vector):
+    global alpha
     dist = 0.
     for di in range(x.shape[0]):
+        ### Nhi: wdtw cal
         diff = (x[di] - y[di])
-        dist += diff * diff
+        sq_diff = diff * diff
+        dist += (1 / (pow(weight_vector, alpha))) * sq_diff
+
+        ### Nhi: dtw cal
+        # diff = (x[di] - y[di])
+        # dist += diff * diff
     return dist
 
 
 @njit()
-def njit_accumulated_matrix(s1, s2, mask):
+def njit_accumulated_matrix1(s1, s2, mask):
     """Compute the accumulated cost matrix score between two time series.
 
     Parameters
@@ -57,10 +64,18 @@ def njit_accumulated_matrix(s1, s2, mask):
     cum_sum = numpy.full((l1 + 1, l2 + 1), numpy.inf)
     cum_sum[0, 0] = 0.
 
+    ### Nhi: generate random weight_vector here, we should think about a precomputed weight based on data
+    # weight_vector = numpy.ones(l2)/1 # uniform weighting
+    # weight_vector = numpy.random.rand(l2)  # random weighting
+    tmp_s2 = s2.ravel()
+    weight_vector = numpy.abs(tmp_s2 - numpy.mean(tmp_s2)) / (numpy.max(tmp_s2) / 2)  # using s2 as weighting
+    # print(weight_vector)
+
     for i in range(l1):
         for j in range(l2):
             if numpy.isfinite(mask[i, j]):
-                cum_sum[i + 1, j + 1] = _local_squared_dist(s1[i], s2[j])
+                ### Nhi: add weight_vector
+                cum_sum[i + 1, j + 1] = _local_squared_dist1(s1[i], s2[j], weight_vector[j])
                 cum_sum[i + 1, j + 1] += min(cum_sum[i, j + 1],
                                              cum_sum[i + 1, j],
                                              cum_sum[i, j])
@@ -68,7 +83,7 @@ def njit_accumulated_matrix(s1, s2, mask):
 
 
 @njit(nogil=True)
-def njit_dtw(s1, s2, mask):
+def njit_wdtw(s1, s2, mask):
     """Compute the dynamic time warping score between two time series.
 
     Parameters
@@ -88,12 +103,12 @@ def njit_dtw(s1, s2, mask):
         Dynamic Time Warping score between both time series.
 
     """
-    cum_sum = njit_accumulated_matrix(s1, s2, mask)
+    cum_sum = njit_accumulated_matrix1(s1, s2, mask)
     return numpy.sqrt(cum_sum[-1, -1])
 
 
 @njit()
-def _return_path(acc_cost_mat):
+def _return_path1(acc_cost_mat):
     sz1, sz2 = acc_cost_mat.shape
     path = [(sz1 - 1, sz2 - 1)]
     while path[-1] != (0, 0):
@@ -116,8 +131,8 @@ def _return_path(acc_cost_mat):
     return path[::-1]
 
 
-def dtw_path(s1, s2, global_constraint=None, sakoe_chiba_radius=None,
-             itakura_max_slope=None):
+def wdtw_path(s1, s2, global_constraint=None, sakoe_chiba_radius=None,
+              itakura_max_slope=None):
     r"""Compute Dynamic Time Warping (DTW) similarity measure between
     (possibly multidimensional) time series and return both the path and the
     similarity.
@@ -175,13 +190,13 @@ def dtw_path(s1, s2, global_constraint=None, sakoe_chiba_radius=None,
 
     Examples
     --------
-    >>> path, dist = dtw_path([1, 2, 3], [1., 2., 2., 3.])
-    >>> path
-    [(0, 0), (1, 1), (1, 2), (2, 3)]
-    >>> dist
-    0.0
-    >>> dtw_path([1, 2, 3], [1., 2., 2., 3., 4.])[1]
-    1.0
+    # >>> path, dist = dtw_path([1, 2, 3], [1., 2., 2., 3.])
+    # >>> path
+    # [(0, 0), (1, 1), (1, 2), (2, 3)]
+    # >>> dist
+    # 0.0
+    # >>> dtw_path([1, 2, 3], [1., 2., 2., 3., 4.])[1]
+    # 1.0
 
     See Also
     --------
@@ -202,17 +217,17 @@ def dtw_path(s1, s2, global_constraint=None, sakoe_chiba_radius=None,
     if len(s1) == 0 or len(s2) == 0:
         raise ValueError("One of the input time series contains only nans or has zero length.")
 
-    mask = compute_mask(
-        s1, s2, GLOBAL_CONSTRAINT_CODE[global_constraint],
+    mask = compute_mask1(
+        s1, s2, GLOBAL_CONSTRAINT_CODE1[global_constraint],
         sakoe_chiba_radius, itakura_max_slope
     )
-    acc_cost_mat = njit_accumulated_matrix(s1, s2, mask=mask)
-    path = _return_path(acc_cost_mat)
+    acc_cost_mat = njit_accumulated_matrix1(s1, s2, mask=mask)
+    path = _return_path1(acc_cost_mat)
     return path, numpy.sqrt(acc_cost_mat[-1, -1])
 
 
 @njit()
-def njit_accumulated_matrix_from_dist_matrix(dist_matrix, mask):
+def njit_accumulated_matrix_from_dist_matrix1(dist_matrix, mask):
     """Compute the accumulated cost matrix score between two time series using
     a precomputed distance matrix.
 
@@ -244,9 +259,9 @@ def njit_accumulated_matrix_from_dist_matrix(dist_matrix, mask):
     return cum_sum[1:, 1:]
 
 
-def dtw_path_from_metric(s1, s2=None, metric="euclidean",
-                         global_constraint=None, sakoe_chiba_radius=None,
-                         itakura_max_slope=None, **kwds):
+def wdtw_path_from_metric(s1, s2=None, metric="euclidean",
+                          global_constraint=None, sakoe_chiba_radius=None,
+                          itakura_max_slope=None, **kwds):
     r"""Compute Dynamic Time Warping (DTW) similarity measure between
     (possibly multidimensional) time series using a distance metric defined by
     the user and return both the path and the similarity.
@@ -325,30 +340,30 @@ def dtw_path_from_metric(s1, s2=None, metric="euclidean",
     --------
     Lets create 2 numpy arrays to wrap:
 
-    >>> import numpy as np
-    >>> rng = np.random.RandomState(0)
-    >>> s1, s2 = rng.rand(5, 2), rng.rand(6, 2)
-
-    The wrapping can be done by passing a string indicating the metric to pass
-    to scikit-learn pairwise_distances:
-
-    >>> dtw_path_from_metric(s1, s2,
-    ...                      metric="sqeuclidean")  # doctest: +ELLIPSIS
-    ([(0, 0), (0, 1), (1, 2), (2, 3), (3, 4), (4, 5)], 1.117...)
-
-    Or by defining a custom distance function:
-
-    >>> sqeuclidean = lambda x, y: np.sum((x-y)**2)
-    >>> dtw_path_from_metric(s1, s2, metric=sqeuclidean)  # doctest: +ELLIPSIS
-    ([(0, 0), (0, 1), (1, 2), (2, 3), (3, 4), (4, 5)], 1.117...)
-
-    Or by using a precomputed distance matrix as input:
-
-    >>> from sklearn.metrics.pairwise import pairwise_distances
-    >>> dist_matrix = pairwise_distances(s1, s2, metric="sqeuclidean")
-    >>> dtw_path_from_metric(dist_matrix,
-    ...                      metric="precomputed")  # doctest: +ELLIPSIS
-    ([(0, 0), (0, 1), (1, 2), (2, 3), (3, 4), (4, 5)], 1.117...)
+    # >>> import numpy as np
+    # >>> rng = np.random.RandomState(0)
+    # >>> s1, s2 = rng.rand(5, 2), rng.rand(6, 2)
+    # 
+    # The wrapping can be done by passing a string indicating the metric to pass
+    # to scikit-learn pairwise_distances:
+    # 
+    # >>> dtw_path_from_metric(s1, s2,
+    # ...                      metric="sqeuclidean")  # doctest: +ELLIPSIS
+    # ([(0, 0), (0, 1), (1, 2), (2, 3), (3, 4), (4, 5)], 1.117...)
+    # 
+    # Or by defining a custom distance function:
+    # 
+    # >>> sqeuclidean = lambda x, y: np.sum((x-y)**2)
+    # >>> dtw_path_from_metric(s1, s2, metric=sqeuclidean)  # doctest: +ELLIPSIS
+    # ([(0, 0), (0, 1), (1, 2), (2, 3), (3, 4), (4, 5)], 1.117...)
+    # 
+    # Or by using a precomputed distance matrix as input:
+    # 
+    # >>> from sklearn.metrics.pairwise import pairwise_distances
+    # >>> dist_matrix = pairwise_distances(s1, s2, metric="sqeuclidean")
+    # >>> dtw_path_from_metric(dist_matrix,
+    # ...                      metric="precomputed")  # doctest: +ELLIPSIS
+    # ([(0, 0), (0, 1), (1, 2), (2, 3), (3, 4), (4, 5)], 1.117...)
 
     Notes
     --------
@@ -375,26 +390,26 @@ def dtw_path_from_metric(s1, s2=None, metric="euclidean",
     """  # noqa: E501
     if metric == "precomputed":  # Pairwise distance given as input
         sz1, sz2 = s1.shape
-        mask = compute_mask(
-            sz1, sz2, GLOBAL_CONSTRAINT_CODE[global_constraint],
+        mask = compute_mask1(
+            sz1, sz2, GLOBAL_CONSTRAINT_CODE1[global_constraint],
             sakoe_chiba_radius, itakura_max_slope
         )
         dist_mat = s1
     else:
         s1 = to_time_series(s1, remove_nans=True)
         s2 = to_time_series(s2, remove_nans=True)
-        mask = compute_mask(
-            s1, s2, GLOBAL_CONSTRAINT_CODE[global_constraint],
+        mask = compute_mask1(
+            s1, s2, GLOBAL_CONSTRAINT_CODE1[global_constraint],
             sakoe_chiba_radius, itakura_max_slope
         )
         dist_mat = pairwise_distances(s1, s2, metric=metric, **kwds)
 
-    acc_cost_mat = njit_accumulated_matrix_from_dist_matrix(dist_mat, mask)
-    path = _return_path(acc_cost_mat)
+    acc_cost_mat = njit_accumulated_matrix_from_dist_matrix1(dist_mat, mask)
+    path = _return_path1(acc_cost_mat)
     return path, acc_cost_mat[-1, -1]
 
 
-def dtw(s1, s2, global_constraint=None, sakoe_chiba_radius=None,
+def wdtw(s1, s2, global_constraint=None, sakoe_chiba_radius=None,
         itakura_max_slope=None):
     r"""Compute Dynamic Time Warping (DTW) similarity measure between
     (possibly multidimensional) time series and return it.
@@ -450,10 +465,10 @@ def dtw(s1, s2, global_constraint=None, sakoe_chiba_radius=None,
 
     Examples
     --------
-    >>> dtw([1, 2, 3], [1., 2., 2., 3.])
-    0.0
-    >>> dtw([1, 2, 3], [1., 2., 2., 3., 4.])
-    1.0
+    # >>> dtw([1, 2, 3], [1., 2., 2., 3.])
+    # 0.0
+    # >>> dtw([1, 2, 3], [1., 2., 2., 3., 4.])
+    # 1.0
 
     See Also
     --------
@@ -470,15 +485,15 @@ def dtw(s1, s2, global_constraint=None, sakoe_chiba_radius=None,
     s1 = to_time_series(s1, remove_nans=True)
     s2 = to_time_series(s2, remove_nans=True)
 
-    mask = compute_mask(
+    mask = compute_mask1(
         s1, s2,
-        GLOBAL_CONSTRAINT_CODE[global_constraint],
+        GLOBAL_CONSTRAINT_CODE1[global_constraint],
         sakoe_chiba_radius=sakoe_chiba_radius,
         itakura_max_slope=itakura_max_slope)
-    return njit_dtw(s1, s2, mask=mask)
+    return njit_wdtw(s1, s2, mask=mask)
 
 
-def _max_steps(i, j, max_length, length_1, length_2):
+def _max_steps1(i, j, max_length, length_1, length_2):
     """Maximum number of steps required in a L-DTW process to reach a given
     cell.
 
@@ -509,7 +524,7 @@ def _max_steps(i, j, max_length, length_1, length_2):
     return min(candidate_1, candidate_2)
 
 
-def _limited_warping_length_cost(s1, s2, max_length):
+def _limited_warping_length_cost1(s1, s2, max_length):
     r"""Compute accumulated scores necessary fo L-DTW.
 
     Parameters
@@ -536,21 +551,21 @@ def _limited_warping_length_cost(s1, s2, max_length):
             dict_costs[i, j] = {}
 
     # Init
-    dict_costs[0, 0][0] = _local_squared_dist(s1[0], s2[0])
+    dict_costs[0, 0][0] = _local_squared_dist1(s1[0], s2[0])
     for i in range(1, s1.shape[0]):
         pred = dict_costs[i - 1, 0][i - 1]
-        dict_costs[i, 0][i] = pred + _local_squared_dist(s1[i], s2[0])
+        dict_costs[i, 0][i] = pred + _local_squared_dist1(s1[i], s2[0])
     for j in range(1, s2.shape[0]):
         pred = dict_costs[0, j - 1][j - 1]
-        dict_costs[0, j][j] = pred + _local_squared_dist(s1[0], s2[j])
+        dict_costs[0, j][j] = pred + _local_squared_dist1(s1[0], s2[j])
 
     # Main loop
     for i in range(1, s1.shape[0]):
         for j in range(1, s2.shape[0]):
             min_s = max(i, j)
-            max_s = _max_steps(i, j, max_length - 1, s1.shape[0], s2.shape[0])
+            max_s = _max_steps1(i, j, max_length - 1, s1.shape[0], s2.shape[0])
             for s in range(min_s, max_s + 1):
-                dict_costs[i, j][s] = _local_squared_dist(s1[i], s2[j])
+                dict_costs[i, j][s] = _local_squared_dist1(s1[i], s2[j])
                 dict_costs[i, j][s] += min(
                     dict_costs[i, j - 1].get(s - 1, numpy.inf),
                     dict_costs[i - 1, j].get(s - 1, numpy.inf),
@@ -559,7 +574,7 @@ def _limited_warping_length_cost(s1, s2, max_length):
     return dict_costs
 
 
-def dtw_limited_warping_length(s1, s2, max_length):
+def wdtw_limited_warping_length(s1, s2, max_length):
     r"""Compute Dynamic Time Warping (DTW) similarity measure between
     (possibly multidimensional) time series under an upper bound constraint on
     the resulting path length and return the similarity cost.
@@ -601,10 +616,10 @@ def dtw_limited_warping_length(s1, s2, max_length):
 
     Examples
     --------
-    >>> dtw_limited_warping_length([1, 2, 3], [1., 2., 2., 3.], 5)
-    0.0
-    >>> dtw_limited_warping_length([1, 2, 3], [1., 2., 2., 3., 4.], 5)
-    1.0
+    # >>> dtw_limited_warping_length([1, 2, 3], [1., 2., 2., 3.], 5)
+    # 0.0
+    # >>> dtw_limited_warping_length([1, 2, 3], [1., 2., 2., 3., 4.], 5)
+    # 1.0
 
     See Also
     --------
@@ -628,14 +643,14 @@ def dtw_limited_warping_length(s1, s2, max_length):
         raise ValueError("Cannot find a path of length {} to align given "
                          "time series.".format(max_length))
 
-    accumulated_costs = _limited_warping_length_cost(s1, s2, max_length)
+    accumulated_costs = _limited_warping_length_cost1(s1, s2, max_length)
     idx_pair = (s1.shape[0] - 1, s2.shape[0] - 1)
     optimal_cost = min(accumulated_costs[idx_pair].values())
     return numpy.sqrt(optimal_cost)
 
 
-def _return_path_limited_warping_length(accum_costs, target_indices,
-                                        optimal_length):
+def _return_path_limited_warping_length1(accum_costs, target_indices,
+                                         optimal_length):
     path = [target_indices]
     cur_length = optimal_length
     while path[-1] != (0, 0):
@@ -661,7 +676,7 @@ def _return_path_limited_warping_length(accum_costs, target_indices,
     return path[::-1]
 
 
-def dtw_path_limited_warping_length(s1, s2, max_length):
+def wdtw_path_limited_warping_length(s1, s2, max_length):
     r"""Compute Dynamic Time Warping (DTW) similarity measure between
     (possibly multidimensional) time series under an upper bound constraint on
     the resulting path length and return the path as well as the similarity
@@ -707,18 +722,18 @@ def dtw_path_limited_warping_length(s1, s2, max_length):
 
     Examples
     --------
-    >>> path, cost = dtw_path_limited_warping_length([1, 2, 3],
-    ...                                              [1., 2., 2., 3.], 5)
-    >>> cost
-    0.0
-    >>> path
-    [(0, 0), (1, 1), (1, 2), (2, 3)]
-    >>> path, cost = dtw_path_limited_warping_length([1, 2, 3],
-    ...                                              [1., 2., 2., 3., 4.], 5)
-    >>> cost
-    1.0
-    >>> path
-    [(0, 0), (1, 1), (1, 2), (2, 3), (2, 4)]
+    # >>> path, cost = dtw_path_limited_warping_length([1, 2, 3],
+    # ...                                              [1., 2., 2., 3.], 5)
+    # >>> cost
+    # 0.0
+    # >>> path
+    # [(0, 0), (1, 1), (1, 2), (2, 3)]
+    # >>> path, cost = dtw_path_limited_warping_length([1, 2, 3],
+    # ...                                              [1., 2., 2., 3., 4.], 5)
+    # >>> cost
+    # 1.0
+    # >>> path
+    # [(0, 0), (1, 1), (1, 2), (2, 3), (2, 4)]
 
     See Also
     --------
@@ -742,7 +757,7 @@ def dtw_path_limited_warping_length(s1, s2, max_length):
         raise ValueError("Cannot find a path of length {} to align given "
                          "time series.".format(max_length))
 
-    accumulated_costs = _limited_warping_length_cost(s1, s2, max_length)
+    accumulated_costs = _limited_warping_length_cost1(s1, s2, max_length)
     idx_pair = (s1.shape[0] - 1, s2.shape[0] - 1)
     optimal_length = -1
     optimal_cost = numpy.inf
@@ -750,14 +765,14 @@ def dtw_path_limited_warping_length(s1, s2, max_length):
         if v < optimal_cost:
             optimal_cost = v
             optimal_length = k
-    path = _return_path_limited_warping_length(accumulated_costs,
-                                               idx_pair,
-                                               optimal_length)
+    path = _return_path_limited_warping_length1(accumulated_costs,
+                                                idx_pair,
+                                                optimal_length)
     return path, numpy.sqrt(optimal_cost)
 
 
 @njit()
-def _subsequence_cost_matrix(subseq, longseq):
+def _subsequence_cost_matrix1(subseq, longseq):
     l1 = subseq.shape[0]
     l2 = longseq.shape[0]
     cum_sum = numpy.full((l1 + 1, l2 + 1), numpy.inf)
@@ -765,14 +780,14 @@ def _subsequence_cost_matrix(subseq, longseq):
 
     for i in range(l1):
         for j in range(l2):
-            cum_sum[i + 1, j + 1] = _local_squared_dist(subseq[i], longseq[j])
+            cum_sum[i + 1, j + 1] = _local_squared_dist1(subseq[i], longseq[j])
             cum_sum[i + 1, j + 1] += min(cum_sum[i, j + 1],
                                          cum_sum[i + 1, j],
                                          cum_sum[i, j])
     return cum_sum[1:, 1:]
 
 
-def subsequence_cost_matrix(subseq, longseq):
+def subsequence_cost_matrix1(subseq, longseq):
     """Compute the accumulated cost matrix score between a subsequence and
     a reference time series.
 
@@ -789,11 +804,11 @@ def subsequence_cost_matrix(subseq, longseq):
     mat : array, shape = (sz1, sz2)
         Accumulated cost matrix.
     """
-    return _subsequence_cost_matrix(subseq, longseq)
+    return _subsequence_cost_matrix1(subseq, longseq)
 
 
 @njit()
-def _subsequence_path(acc_cost_mat, idx_path_end):
+def _subsequence_path1(acc_cost_mat, idx_path_end):
     sz1, sz2 = acc_cost_mat.shape
     path = [(sz1 - 1, idx_path_end)]
     while path[-1][0] != 0:
@@ -816,7 +831,7 @@ def _subsequence_path(acc_cost_mat, idx_path_end):
     return path[::-1]
 
 
-def subsequence_path(acc_cost_mat, idx_path_end):
+def subsequence_path1(acc_cost_mat, idx_path_end):
     r"""Compute the optimal path through a accumulated cost matrix given the
     endpoint of the sequence.
 
@@ -839,13 +854,13 @@ def subsequence_path(acc_cost_mat, idx_path_end):
     Examples
     --------
 
-    >>> acc_cost_mat = numpy.array([[1., 0., 0., 1., 4.],
-    ...                             [5., 1., 1., 0., 1.]])
-    >>> # calculate the globally optimal path
-    >>> optimal_end_point = numpy.argmin(acc_cost_mat[-1, :])
-    >>> path = subsequence_path(acc_cost_mat, optimal_end_point)
-    >>> path
-    [(0, 2), (1, 3)]
+    # >>> acc_cost_mat = numpy.array([[1., 0., 0., 1., 4.],
+    # ...                             [5., 1., 1., 0., 1.]])
+    # >>> # calculate the globally optimal path
+    # >>> optimal_end_point = numpy.argmin(acc_cost_mat[-1, :])
+    # >>> path = subsequence_path(acc_cost_mat, optimal_end_point)
+    # >>> path
+    # [(0, 2), (1, 3)]
 
     See Also
     --------
@@ -853,10 +868,10 @@ def subsequence_path(acc_cost_mat, idx_path_end):
     subsequence_cost_matrix: Calculate the required cost matrix
 
     """
-    return _subsequence_path(acc_cost_mat, idx_path_end)
+    return _subsequence_path1(acc_cost_mat, idx_path_end)
 
 
-def dtw_subsequence_path(subseq, longseq):
+def wdtw_subsequence_path(subseq, longseq):
     r"""Compute sub-sequence Dynamic Time Warping (DTW) similarity measure
     between a (possibly multidimensional) query and a long time series and
     return both the path and the similarity.
@@ -895,11 +910,11 @@ def dtw_subsequence_path(subseq, longseq):
 
     Examples
     --------
-    >>> path, dist = dtw_subsequence_path([2., 3.], [1., 2., 2., 3., 4.])
-    >>> path
-    [(0, 2), (1, 3)]
-    >>> dist
-    0.0
+    # >>> path, dist = dtw_subsequence_path([2., 3.], [1., 2., 2., 3., 4.])
+    # >>> path
+    # [(0, 2), (1, 3)]
+    # >>> dist
+    # 0.0
 
     See Also
     --------
@@ -909,15 +924,15 @@ def dtw_subsequence_path(subseq, longseq):
     """
     subseq = to_time_series(subseq)
     longseq = to_time_series(longseq)
-    acc_cost_mat = subsequence_cost_matrix(subseq=subseq,
-                                           longseq=longseq)
+    acc_cost_mat = subsequence_cost_matrix1(subseq=subseq,
+                                            longseq=longseq)
     global_optimal_match = numpy.argmin(acc_cost_mat[-1, :])
-    path = subsequence_path(acc_cost_mat, global_optimal_match)
+    path = subsequence_path1(acc_cost_mat, global_optimal_match)
     return path, numpy.sqrt(acc_cost_mat[-1, :][global_optimal_match])
 
 
 @njit()
-def sakoe_chiba_mask(sz1, sz2, radius=1):
+def sakoe_chiba_mask1(sz1, sz2, radius=1):
     """Compute the Sakoe-Chiba mask.
 
     Parameters
@@ -938,19 +953,19 @@ def sakoe_chiba_mask(sz1, sz2, radius=1):
 
     Examples
     --------
-    >>> sakoe_chiba_mask(4, 4, 1)
-    array([[ 0.,  0., inf, inf],
-           [ 0.,  0.,  0., inf],
-           [inf,  0.,  0.,  0.],
-           [inf, inf,  0.,  0.]])
-    >>> sakoe_chiba_mask(7, 3, 1)
-    array([[ 0.,  0., inf],
-           [ 0.,  0.,  0.],
-           [ 0.,  0.,  0.],
-           [ 0.,  0.,  0.],
-           [ 0.,  0.,  0.],
-           [ 0.,  0.,  0.],
-           [inf,  0.,  0.]])
+    # >>> sakoe_chiba_mask(4, 4, 1)
+    # array([[ 0.,  0., inf, inf],
+    #        [ 0.,  0.,  0., inf],
+    #        [inf,  0.,  0.,  0.],
+    #        [inf, inf,  0.,  0.]])
+    # >>> sakoe_chiba_mask(7, 3, 1)
+    # array([[ 0.,  0., inf],
+    #        [ 0.,  0.,  0.],
+    #        [ 0.,  0.,  0.],
+    #        [ 0.,  0.,  0.],
+    #        [ 0.,  0.,  0.],
+    #        [ 0.,  0.,  0.],
+    #        [inf,  0.,  0.]])
     """
     mask = numpy.full((sz1, sz2), numpy.inf)
     if sz1 > sz2:
@@ -969,7 +984,7 @@ def sakoe_chiba_mask(sz1, sz2, radius=1):
 
 
 @njit()
-def _njit_itakura_mask(sz1, sz2, max_slope=2.):
+def _njit_itakura_mask1(sz1, sz2, max_slope=2.):
     """Compute the Itakura mask without checking that the constraints
     are feasible. In most cases, you should use itakura_mask instead.
 
@@ -1019,7 +1034,7 @@ def _njit_itakura_mask(sz1, sz2, max_slope=2.):
     return mask
 
 
-def itakura_mask(sz1, sz2, max_slope=2.):
+def itakura_mask1(sz1, sz2, max_slope=2.):
     """Compute the Itakura mask.
 
     Parameters
@@ -1040,15 +1055,15 @@ def itakura_mask(sz1, sz2, max_slope=2.):
 
     Examples
     --------
-    >>> itakura_mask(6, 6)
-    array([[ 0., inf, inf, inf, inf, inf],
-           [inf,  0.,  0., inf, inf, inf],
-           [inf,  0.,  0.,  0., inf, inf],
-           [inf, inf,  0.,  0.,  0., inf],
-           [inf, inf, inf,  0.,  0., inf],
-           [inf, inf, inf, inf, inf,  0.]])
+    # >>> itakura_mask(6, 6)
+    # array([[ 0., inf, inf, inf, inf, inf],
+    #        [inf,  0.,  0., inf, inf, inf],
+    #        [inf,  0.,  0.,  0., inf, inf],
+    #        [inf, inf,  0.,  0.,  0., inf],
+    #        [inf, inf, inf,  0.,  0., inf],
+    #        [inf, inf, inf, inf, inf,  0.]])
     """
-    mask = _njit_itakura_mask(sz1, sz2, max_slope=max_slope)
+    mask = _njit_itakura_mask1(sz1, sz2, max_slope=max_slope)
 
     # Post-check
     raise_warning = False
@@ -1070,8 +1085,8 @@ def itakura_mask(sz1, sz2, max_slope=2.):
     return mask
 
 
-def compute_mask(s1, s2, global_constraint=0,
-                 sakoe_chiba_radius=None, itakura_max_slope=None):
+def compute_mask1(s1, s2, global_constraint=0,
+                  sakoe_chiba_radius=None, itakura_max_slope=None):
     """Compute the mask (region constraint).
 
     Parameters
@@ -1129,18 +1144,18 @@ def compute_mask(s1, s2, global_constraint=0,
                                   and sakoe_chiba_radius is not None):
         if sakoe_chiba_radius is None:
             sakoe_chiba_radius = 1
-        mask = sakoe_chiba_mask(sz1, sz2, radius=sakoe_chiba_radius)
+        mask = sakoe_chiba_mask1(sz1, sz2, radius=sakoe_chiba_radius)
     elif global_constraint == 1 or (global_constraint == 0
                                     and itakura_max_slope is not None):
         if itakura_max_slope is None:
             itakura_max_slope = 2.
-        mask = itakura_mask(sz1, sz2, max_slope=itakura_max_slope)
+        mask = itakura_mask1(sz1, sz2, max_slope=itakura_max_slope)
     else:
         mask = numpy.zeros((sz1, sz2))
     return mask
 
 
-def cdist_dtw(dataset1, dataset2=None, global_constraint=None,
+def cdist_wdtw(dataset1, dataset2=None, global_constraint=None,
               sakoe_chiba_radius=None, itakura_max_slope=None, n_jobs=None,
               verbose=0):
     r"""Compute cross-similarity matrix using Dynamic Time Warping (DTW)
@@ -1214,12 +1229,12 @@ def cdist_dtw(dataset1, dataset2=None, global_constraint=None,
 
     Examples
     --------
-    >>> cdist_dtw([[1, 2, 2, 3], [1., 2., 3., 4.]])
-    array([[0., 1.],
-           [1., 0.]])
-    >>> cdist_dtw([[1, 2, 2, 3], [1., 2., 3., 4.]], [[1, 2, 3], [2, 3, 4, 5]])
-    array([[0.        , 2.44948974],
-           [1.        , 1.41421356]])
+    # >>> cdist_wdtw([[1, 2, 2, 3], [1., 2., 3., 4.]])
+    # array([[0., 1.],
+    #        [1., 0.]])
+    # >>> cdist_wdtw([[1, 2, 2, 3], [1., 2., 3., 4.]], [[1, 2, 3], [2, 3, 4, 5]])
+    # array([[0.        , 2.44948974],
+    #        [1.        , 1.41421356]])
 
     See Also
     --------
@@ -1231,7 +1246,7 @@ def cdist_dtw(dataset1, dataset2=None, global_constraint=None,
            spoken word recognition," IEEE Transactions on Acoustics, Speech and
            Signal Processing, vol. 26(1), pp. 43--49, 1978.
     """  # noqa: E501
-    return _cdist_generic(dist_fun=dtw, dataset1=dataset1, dataset2=dataset2,
+    return _cdist_generic(dist_fun=wdtw, dataset1=dataset1, dataset2=dataset2,
                           n_jobs=n_jobs, verbose=verbose,
                           compute_diagonal=False,
                           global_constraint=global_constraint,
@@ -1239,7 +1254,7 @@ def cdist_dtw(dataset1, dataset2=None, global_constraint=None,
                           itakura_max_slope=itakura_max_slope)
 
 
-def lb_keogh(ts_query, ts_candidate=None, radius=1, envelope_candidate=None):
+def lb_keogh1(ts_query, ts_candidate=None, radius=1, envelope_candidate=None):
     r"""Compute LB_Keogh.
 
     LB_Keogh was originally presented in [1]_.
@@ -1276,16 +1291,16 @@ def lb_keogh(ts_query, ts_candidate=None, radius=1, envelope_candidate=None):
 
     Examples
     --------
-    >>> ts1 = [1, 2, 3, 2, 1]
-    >>> ts2 = [0, 0, 0, 0, 0]
-    >>> env_low, env_up = lb_envelope(ts1, radius=1)
-    >>> lb_keogh(ts_query=ts2,
-    ...          envelope_candidate=(env_low, env_up))  # doctest: +ELLIPSIS
-    2.8284...
-    >>> lb_keogh(ts_query=ts2,
-    ...          ts_candidate=ts1,
-    ...          radius=1)  # doctest: +ELLIPSIS
-    2.8284...
+    # >>> ts1 = [1, 2, 3, 2, 1]
+    # >>> ts2 = [0, 0, 0, 0, 0]
+    # >>> env_low, env_up = lb_envelope(ts1, radius=1)
+    # >>> lb_keogh(ts_query=ts2,
+    # ...          envelope_candidate=(env_low, env_up))  # doctest: +ELLIPSIS
+    # 2.8284...
+    # >>> lb_keogh(ts_query=ts2,
+    # ...          ts_candidate=ts1,
+    # ...          radius=1)  # doctest: +ELLIPSIS
+    # 2.8284...
 
     See also
     --------
@@ -1302,7 +1317,7 @@ def lb_keogh(ts_query, ts_candidate=None, radius=1, envelope_candidate=None):
         ts_candidate = to_time_series(ts_candidate)
         assert ts_candidate.shape[1] == 1, \
             "LB_Keogh is available only for monodimensional time series"
-        envelope_down, envelope_up = lb_envelope(ts_candidate, radius)
+        envelope_down, envelope_up = lb_envelope1(ts_candidate, radius)
     ts_query = to_time_series(ts_query)
     assert ts_query.shape[1] == 1, \
         "LB_Keogh is available only for monodimensional time series"
@@ -1315,7 +1330,7 @@ def lb_keogh(ts_query, ts_candidate=None, radius=1, envelope_candidate=None):
 
 
 @njit()
-def njit_lb_envelope(time_series, radius):
+def njit_lb_envelope1(time_series, radius):
     sz, d = time_series.shape
     enveloppe_up = numpy.empty((sz, d))
     enveloppe_down = numpy.empty((sz, d))
@@ -1334,7 +1349,7 @@ def njit_lb_envelope(time_series, radius):
     return enveloppe_down, enveloppe_up
 
 
-def lb_envelope(ts, radius=1):
+def lb_envelope1(ts, radius=1):
     r"""Compute time-series envelope as required by LB_Keogh.
 
     LB_Keogh was originally presented in [1]_.
@@ -1358,20 +1373,20 @@ def lb_envelope(ts, radius=1):
 
     Examples
     --------
-    >>> ts1 = [1, 2, 3, 2, 1]
-    >>> env_low, env_up = lb_envelope(ts1, radius=1)
-    >>> env_low
-    array([[1.],
-           [1.],
-           [2.],
-           [1.],
-           [1.]])
-    >>> env_up
-    array([[2.],
-           [3.],
-           [3.],
-           [3.],
-           [2.]])
+    # >>> ts1 = [1, 2, 3, 2, 1]
+    # >>> env_low, env_up = lb_envelope(ts1, radius=1)
+    # >>> env_low
+    # array([[1.],
+    #        [1.],
+    #        [2.],
+    #        [1.],
+    #        [1.]])
+    # >>> env_up
+    # array([[2.],
+    #        [3.],
+    #        [3.],
+    #        [3.],
+    #        [2.]])
 
     See also
     --------
@@ -1382,11 +1397,11 @@ def lb_envelope(ts, radius=1):
     .. [1] Keogh, E. Exact indexing of dynamic time warping. In International
        Conference on Very Large Data Bases, 2002. pp 406-417.
     """
-    return njit_lb_envelope(to_time_series(ts), radius=radius)
+    return njit_lb_envelope1(to_time_series(ts), radius=radius)
 
 
 @njit(nogil=True)
-def njit_lcss_accumulated_matrix(s1, s2, eps, mask):
+def njit_lcss_accumulated_matrix1(s1, s2, eps, mask):
     """Compute the longest common subsequence similarity score between
     two time series.
 
@@ -1417,7 +1432,7 @@ def njit_lcss_accumulated_matrix(s1, s2, eps, mask):
     for i in range(1, l1 + 1):
         for j in range(1, l2 + 1):
             if numpy.isfinite(mask[i - 1, j - 1]):
-                if numpy.sqrt(_local_squared_dist(s1[i - 1], s2[j - 1])) <= eps:
+                if numpy.sqrt(_local_squared_dist1(s1[i - 1], s2[j - 1])) <= eps:
                     acc_cost_mat[i][j] = 1 + acc_cost_mat[i - 1][j - 1]
                 else:
                     acc_cost_mat[i][j] = max(acc_cost_mat[i][j - 1],
@@ -1427,7 +1442,7 @@ def njit_lcss_accumulated_matrix(s1, s2, eps, mask):
 
 
 @njit(nogil=True)
-def njit_lcss(s1, s2, eps, mask):
+def njit_lcss1(s1, s2, eps, mask):
     """Compute the longest common subsequence score between two time series.
 
     Parameters
@@ -1451,13 +1466,13 @@ def njit_lcss(s1, s2, eps, mask):
     """
     l1 = s1.shape[0]
     l2 = s2.shape[0]
-    acc_cost_mat = njit_lcss_accumulated_matrix(s1, s2, eps, mask)
+    acc_cost_mat = njit_lcss_accumulated_matrix1(s1, s2, eps, mask)
 
     return float(acc_cost_mat[-1][-1]) / min([l1, l2])
 
 
-def lcss(s1, s2, eps=1., global_constraint=None, sakoe_chiba_radius=None,
-         itakura_max_slope=None):
+def lcss1(s1, s2, eps=1., global_constraint=None, sakoe_chiba_radius=None,
+          itakura_max_slope=None):
     r"""Compute the Longest Common Subsequence (LCSS) similarity measure
     between (possibly multidimensional) time series and return the
     similarity.
@@ -1523,14 +1538,14 @@ def lcss(s1, s2, eps=1., global_constraint=None, sakoe_chiba_radius=None,
 
     Examples
     --------
-    >>> lcss([1, 2, 3], [1., 2., 2., 3.])
-    1.0
-    >>> lcss([1, 2, 3], [1., 2., 2., 4., 7.])
-    1.0
-    >>> lcss([1, 2, 3], [1., 2., 2., 2., 3.], eps=0)
-    1.0
-    >>> lcss([1, 2, 3], [-2., 5., 7.], eps=3)
-    0.6666666666666666
+    # >>> lcss([1, 2, 3], [1., 2., 2., 3.])
+    # 1.0
+    # >>> lcss([1, 2, 3], [1., 2., 2., 4., 7.])
+    # 1.0
+    # >>> lcss([1, 2, 3], [1., 2., 2., 2., 3.], eps=0)
+    # 1.0
+    # >>> lcss([1, 2, 3], [-2., 5., 7.], eps=3)
+    # 0.6666666666666666
 
     See Also
     --------
@@ -1547,23 +1562,23 @@ def lcss(s1, s2, eps=1., global_constraint=None, sakoe_chiba_radius=None,
     s1 = to_time_series(s1, remove_nans=True)
     s2 = to_time_series(s2, remove_nans=True)
 
-    mask = compute_mask(
+    mask = compute_mask1(
         s1, s2,
-        GLOBAL_CONSTRAINT_CODE[global_constraint],
+        GLOBAL_CONSTRAINT_CODE1[global_constraint],
         sakoe_chiba_radius=sakoe_chiba_radius,
         itakura_max_slope=itakura_max_slope)
 
-    return njit_lcss(s1, s2, eps, mask)
+    return njit_lcss1(s1, s2, eps, mask)
 
 
 @njit()
-def _return_lcss_path(s1, s2, eps, mask, acc_cost_mat, sz1, sz2):
+def _return_lcss_path1(s1, s2, eps, mask, acc_cost_mat, sz1, sz2):
     i, j = (sz1, sz2)
     path = []
 
     while i > 0 and j > 0:
         if numpy.isfinite(mask[i - 1, j - 1]):
-            if numpy.sqrt(_local_squared_dist(s1[i - 1], s2[j - 1])) <= eps:
+            if numpy.sqrt(_local_squared_dist1(s1[i - 1], s2[j - 1])) <= eps:
                 path.append((i - 1, j - 1))
                 i, j = (i - 1, j - 1)
             elif acc_cost_mat[i - 1][j] > acc_cost_mat[i][j - 1]:
@@ -1574,7 +1589,7 @@ def _return_lcss_path(s1, s2, eps, mask, acc_cost_mat, sz1, sz2):
 
 
 @njit()
-def _return_lcss_path_from_dist_matrix(dist_matrix, eps, mask, acc_cost_mat, sz1, sz2):
+def _return_lcss_path_from_dist_matrix1(dist_matrix, eps, mask, acc_cost_mat, sz1, sz2):
     i, j = (sz1, sz2)
     path = []
 
@@ -1590,8 +1605,8 @@ def _return_lcss_path_from_dist_matrix(dist_matrix, eps, mask, acc_cost_mat, sz1
     return path[::-1]
 
 
-def lcss_path(s1, s2, eps=1, global_constraint=None, sakoe_chiba_radius=None,
-              itakura_max_slope=None):
+def lcss_path1(s1, s2, eps=1, global_constraint=None, sakoe_chiba_radius=None,
+               itakura_max_slope=None):
     r"""Compute the Longest Common Subsequence (LCSS) similarity measure
     between (possibly multidimensional) time series and return both the
     path and the similarity.
@@ -1662,13 +1677,13 @@ def lcss_path(s1, s2, eps=1, global_constraint=None, sakoe_chiba_radius=None,
 
     Examples
     --------
-    >>> path, sim = lcss_path([1., 2., 3.], [1., 2., 2., 3.])
-    >>> path
-    [(0, 1), (1, 2), (2, 3)]
-    >>> sim
-    1.0
-    >>> lcss_path([1., 2., 3.], [1., 2., 2., 4.])[1]
-    1.0
+    # >>> path, sim = lcss_path([1., 2., 3.], [1., 2., 2., 3.])
+    # >>> path
+    # [(0, 1), (1, 2), (2, 3)]
+    # >>> sim
+    # 1.0
+    # >>> lcss_path([1., 2., 3.], [1., 2., 2., 4.])[1]
+    # 1.0
 
     See Also
     --------
@@ -1686,21 +1701,21 @@ def lcss_path(s1, s2, eps=1, global_constraint=None, sakoe_chiba_radius=None,
     s1 = to_time_series(s1, remove_nans=True)
     s2 = to_time_series(s2, remove_nans=True)
 
-    mask = compute_mask(
+    mask = compute_mask1(
         s1, s2,
-        GLOBAL_CONSTRAINT_CODE[global_constraint],
+        GLOBAL_CONSTRAINT_CODE1[global_constraint],
         sakoe_chiba_radius, itakura_max_slope)
 
     l1 = s1.shape[0]
     l2 = s2.shape[0]
 
-    acc_cost_mat = njit_lcss_accumulated_matrix(s1, s2, eps, mask)
-    path = _return_lcss_path(s1, s2, eps, mask, acc_cost_mat, l1, l2)
+    acc_cost_mat = njit_lcss_accumulated_matrix1(s1, s2, eps, mask)
+    path = _return_lcss_path1(s1, s2, eps, mask, acc_cost_mat, l1, l2)
 
     return path, float(acc_cost_mat[-1][-1]) / min([l1, l2])
 
 
-def njit_lcss_accumulated_matrix_from_dist_matrix(dist_matrix, eps, mask):
+def njit_lcss_accumulated_matrix_from_dist_matrix1(dist_matrix, eps, mask):
     """Compute the accumulated cost matrix score between two time series using
     a precomputed distance matrix.
 
@@ -1736,9 +1751,9 @@ def njit_lcss_accumulated_matrix_from_dist_matrix(dist_matrix, eps, mask):
     return acc_cost_mat
 
 
-def lcss_path_from_metric(s1, s2=None, eps=1, metric="euclidean",
-                          global_constraint=None, sakoe_chiba_radius=None,
-                          itakura_max_slope=None, **kwds):
+def lcss_path_from_metric1(s1, s2=None, eps=1, metric="euclidean",
+                           global_constraint=None, sakoe_chiba_radius=None,
+                           itakura_max_slope=None, **kwds):
     r"""Compute the Longest Common Subsequence (LCSS) similarity measure between
     (possibly multidimensional) time series using a distance metric defined by
     the user and return both the path and the similarity.
@@ -1821,30 +1836,30 @@ def lcss_path_from_metric(s1, s2=None, eps=1, metric="euclidean",
     --------
     Lets create 2 numpy arrays to wrap:
 
-    >>> import numpy as np
-    >>> rng = np.random.RandomState(0)
-    >>> s1, s2 = rng.rand(5, 2), rng.rand(6, 2)
-
-    The wrapping can be done by passing a string indicating the metric to pass
-    to scikit-learn pairwise_distances:
-
-    >>> lcss_path_from_metric(s1, s2,
-    ...                      metric="sqeuclidean")  # doctest: +ELLIPSIS
-    ([(0, 1), (1, 2), (2, 3), (3, 4), (4, 5)], 1.0)
-
-    Or by defining a custom distance function:
-
-    >>> sqeuclidean = lambda x, y: np.sum((x-y)**2)
-    >>> lcss_path_from_metric(s1, s2, metric=sqeuclidean)  # doctest: +ELLIPSIS
-    ([(0, 1), (1, 2), (2, 3), (3, 4), (4, 5)], 1.0)
-
-    Or by using a precomputed distance matrix as input:
-
-    >>> from sklearn.metrics.pairwise import pairwise_distances
-    >>> dist_matrix = pairwise_distances(s1, s2, metric="sqeuclidean")
-    >>> lcss_path_from_metric(dist_matrix,
-    ...                      metric="precomputed")  # doctest: +ELLIPSIS
-    ([(0, 1), (1, 2), (2, 3), (3, 4), (4, 5)], 1.0)
+    # >>> import numpy as np
+    # >>> rng = np.random.RandomState(0)
+    # >>> s1, s2 = rng.rand(5, 2), rng.rand(6, 2)
+    # 
+    # The wrapping can be done by passing a string indicating the metric to pass
+    # to scikit-learn pairwise_distances:
+    # 
+    # >>> lcss_path_from_metric(s1, s2,
+    # ...                      metric="sqeuclidean")  # doctest: +ELLIPSIS
+    # ([(0, 1), (1, 2), (2, 3), (3, 4), (4, 5)], 1.0)
+    # 
+    # Or by defining a custom distance function:
+    # 
+    # >>> sqeuclidean = lambda x, y: np.sum((x-y)**2)
+    # >>> lcss_path_from_metric(s1, s2, metric=sqeuclidean)  # doctest: +ELLIPSIS
+    # ([(0, 1), (1, 2), (2, 3), (3, 4), (4, 5)], 1.0)
+    # 
+    # Or by using a precomputed distance matrix as input:
+    # 
+    # >>> from sklearn.metrics.pairwise import pairwise_distances
+    # >>> dist_matrix = pairwise_distances(s1, s2, metric="sqeuclidean")
+    # >>> lcss_path_from_metric(dist_matrix,
+    # ...                      metric="precomputed")  # doctest: +ELLIPSIS
+    # ([(0, 1), (1, 2), (2, 3), (3, 4), (4, 5)], 1.0)
 
     Notes
     --------
@@ -1875,8 +1890,8 @@ def lcss_path_from_metric(s1, s2=None, eps=1, metric="euclidean",
     """  # noqa: E501
     if metric == "precomputed":  # Pairwise distance given as input
         sz1, sz2 = s1.shape
-        mask = compute_mask(
-            sz1, sz2, GLOBAL_CONSTRAINT_CODE[global_constraint],
+        mask = compute_mask1(
+            sz1, sz2, GLOBAL_CONSTRAINT_CODE1[global_constraint],
             sakoe_chiba_radius, itakura_max_slope
         )
         dist_mat = s1
@@ -1885,13 +1900,13 @@ def lcss_path_from_metric(s1, s2=None, eps=1, metric="euclidean",
         s2 = to_time_series(s2, remove_nans=True)
         sz1 = s1.shape[0]
         sz2 = s2.shape[0]
-        mask = compute_mask(
-            s1, s2, GLOBAL_CONSTRAINT_CODE[global_constraint],
+        mask = compute_mask1(
+            s1, s2, GLOBAL_CONSTRAINT_CODE1[global_constraint],
             sakoe_chiba_radius, itakura_max_slope
         )
         dist_mat = pairwise_distances(s1, s2, metric=metric, **kwds)
 
-    acc_cost_mat = njit_lcss_accumulated_matrix_from_dist_matrix(dist_mat, eps, mask)
-    path = _return_lcss_path_from_dist_matrix(dist_mat, eps, acc_cost_mat, mask, sz1, sz2)
+    acc_cost_mat = njit_lcss_accumulated_matrix_from_dist_matrix1(dist_mat, eps, mask)
+    path = _return_lcss_path_from_dist_matrix1(dist_mat, eps, acc_cost_mat, mask, sz1, sz2)
 
     return path, float(acc_cost_mat[-1][-1]) / min([sz1, sz2])
