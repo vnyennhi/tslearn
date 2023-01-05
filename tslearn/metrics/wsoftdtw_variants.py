@@ -56,6 +56,7 @@ def njit_gak(s1, s2, gram):
             cum_sum[i + 1, j + 1] += min(cum_sum[i, j + 1],
                                              cum_sum[i + 1, j],
                                              cum_sum[i, j]) * gram[i,j]
+    print(cum_sum)
     return cum_sum[1:, 1:]
 
 
@@ -111,6 +112,7 @@ def unnormalized_gak(s1, s2, sigma=1.):
     s2 = to_time_series(s2, remove_nans=True)
 
     gram = _gak_gram(s1, s2, sigma=sigma)
+    print(gram)
 
     gak_val = njit_gak(s1, s2, gram)
     return gak_val
@@ -219,6 +221,7 @@ def cdist_gak(dataset1, dataset2=None, sigma=1., n_jobs=None, verbose=0):
                                          sigma=sigma,
                                          compute_diagonal=True)
     dataset1 = to_time_series_dataset(dataset1)
+    print(unnormalized_matrix)
     if dataset2 is None:
         diagonal = numpy.diag(numpy.sqrt(1. / numpy.diag(unnormalized_matrix)))
         diagonal_left = diagonal_right = diagonal
